@@ -16,7 +16,7 @@ dependencies = [
 
 [tool.uv.sources]
 pyBallMapper = { git = "https://github.com/jooyounghahn/pyBallMapper.git", branch = "add-gpu-wavemis-benchmark" }
-pyBallMapper-balltree = { path = "/tmp/balltree-pkg" }
+pyBallMapper-balltree = { path = "./tmp/balltree-pkg" }
 fast-ballmapper = { git = "https://github.com/jhnrckmnznrs/fast-ballmapper" }
 
 [tool.uv.workspace]
