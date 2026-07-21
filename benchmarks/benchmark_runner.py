@@ -21,8 +21,21 @@ import gen_synthetic as gs
 from html_report import Report
 from wrappers.wrapper_fastballmapper import FastBallMapperWrapper
 from wrappers.wrapper_pyballmapper import PyBallMapperWrapper
+from wrappers.wrapper_pyballmapper_balltree import PyBallMapperBallTreeWrapper
 
-Wrapper = PyBallMapperWrapper | FastBallMapperWrapper
+Wrapper = PyBallMapperWrapper | FastBallMapperWrapper | PyBallMapperBallTreeWrapper
+
+# GPU is optional — only imported if explicitly requested and torch+cuda available
+_HAS_CUDA = False
+GpuBallMapperWrapper = None
+try:
+    import torch
+
+    _HAS_CUDA = torch.cuda.is_available()
+    if _HAS_CUDA:
+        from wrappers.wrapper_gpu import GpuBallMapperWrapper
+except ImportError:
+    pass
 
 
 # ── correctness helpers ───────────────────────────────────────────────────────
@@ -30,12 +43,19 @@ def _edge_set(graph) -> set[frozenset[int]]:
     return set(frozenset((u, v)) for u, v in graph.edges)
 
 
-def _graphs_match(ref_landmarks, ref_cover, ref_graph, landmarks, cover, graph) -> bool:
+def _landmark_ids_from_graph(graph) -> list[int]:
+    return [int(graph.nodes[n]["landmark"]) for n in graph.nodes]
+
+
+def _cover_from_graph(graph) -> dict[int, list[int]]:
+    return {int(k): [int(p) for p in graph.nodes[k]["points covered"]] for k in graph.nodes}
+
+
+def _graphs_match_from_results(la, ca, ga, lb, cb, gb) -> bool:
     return (
-        ref_landmarks == landmarks
-        and {k: frozenset(v) for k, v in ref_cover.items()}
-        == {k: frozenset(v) for k, v in cover.items()}
-        and _edge_set(ref_graph) == _edge_set(graph)
+        la == lb
+        and {k: frozenset(v) for k, v in ca.items()} == {k: frozenset(v) for k, v in cb.items()}
+        and _edge_set(ga) == _edge_set(gb)
     )
 
 
@@ -43,34 +63,28 @@ def _graphs_match(ref_landmarks, ref_cover, ref_graph, landmarks, cover, graph) 
 def _timed_build(
     wrapper_factory: Callable[[], Wrapper],
     reps: int,
-) -> tuple[list[float], list[float], list[int], dict[int, list[int]], list[int], dict[int, list[int]]]:
+) -> tuple[
+    list[float],
+    list[float],
+]:
     ts: list[float] = []
     peak_mbs: list[float] = []
-    landmarks, cover, graph = None, None, None
-    ref_landmarks, ref_cover, ref_graph = None, None, None
-
     for i in range(reps):
         tracemalloc.start()
         t0 = time.perf_counter()
         w = wrapper_factory()
-        lm, cv, gr = w.build()
+        _, _, gr = w.build()
         elapsed = time.perf_counter() - t0
         _, peak_bytes = tracemalloc.get_traced_memory()
         tracemalloc.stop()
-
         ts.append(elapsed)
         peak_mbs.append(peak_bytes / (1024 * 1024))
-
-        if i == 0:
-            ref_landmarks, ref_cover, ref_graph = lm, cv, gr
-        landmarks, cover, graph = lm, cv, gr
-
-    return ts, peak_mbs, ref_landmarks, ref_cover, ref_graph, landmarks, cover, graph
+    return ts, peak_mbs
 
 
 # ── N-scaling ─────────────────────────────────────────────────────────────────
 def run_n_scaling(
-    wrappers: dict[str, Callable[[np.ndarray, float], Wrapper]],
+    wrappers: dict[str, Callable[..., Wrapper]],
     ns: list[int],
     eps: float,
     reps: int,
@@ -82,14 +96,14 @@ def run_n_scaling(
         log(f"  {name}  eps={eps:.4f}", flush=True)
         for n in ns:
             X = gs.make_highd(n, d=d, seed=n)
-            w = lambda X=X, eps=eps, factory=factory: factory(X, eps)
-            local_factory = lambda X=X, eps=eps, factory=factory: factory(X, eps)
-            all_times, all_mems, *results = _timed_build(local_factory, reps)
-            rl, rc, rg, ll, lc, lg = results
+            local_factory: Callable[[], Wrapper] = lambda X=X, factory=factory: factory(X, eps)
+            all_times, all_mems = _timed_build(local_factory, reps)
             time_arr = np.array(all_times)
             mem_arr = np.array(all_mems)
-            L = len(ll)
-            E = lg.number_of_edges()
+            w = factory(X, eps)
+            _, _, gr = w.build()
+            L = gr.number_of_nodes()
+            E = gr.number_of_edges()
             row = {
                 "wrapper": name,
                 "N": n,
@@ -115,7 +129,7 @@ def run_n_scaling(
 
 # ── eps-scaling ───────────────────────────────────────────────────────────────
 def run_eps_scaling(
-    wrappers: dict[str, Callable[[np.ndarray, float], Wrapper]],
+    wrappers: dict[str, Callable[..., Wrapper]],
     eps_list: list[float],
     n: int,
     reps: int,
@@ -127,13 +141,14 @@ def run_eps_scaling(
     for name, factory in wrappers.items():
         log(f"  {name}  N={n}", flush=True)
         for eps in eps_list:
-            local_factory = lambda X=X, eps=eps, factory=factory: factory(X, eps)
-            all_times, all_mems, *results = _timed_build(local_factory, reps)
-            rl, rc, rg, ll, lc, lg = results
+            local_factory: Callable[[], Wrapper] = lambda X=X, eps=eps, factory=factory: factory(X, eps)
+            all_times, all_mems = _timed_build(local_factory, reps)
             time_arr = np.array(all_times)
             mem_arr = np.array(all_mems)
-            L = len(ll)
-            E = lg.number_of_edges()
+            w = factory(X, eps)
+            _, _, gr = w.build()
+            L = gr.number_of_nodes()
+            E = gr.number_of_edges()
             row = {
                 "wrapper": name,
                 "N": n,
@@ -172,7 +187,9 @@ def run_correctness_check(wrappers, ns, eps, d, log=print):
         ref_name = list(builds.keys())[0]
         ref_lm, ref_cv, ref_gr = builds[ref_name]
         for name, (lm, cv, gr) in builds.items():
-            ok = _graphs_match(ref_lm, ref_cv, ref_gr, lm, cv, gr)
+            if name == ref_name:
+                continue
+            ok = _graphs_match_from_results(ref_lm, ref_cv, ref_gr, lm, cv, gr)
             results.append({"N": n, "ref": ref_name, "target": name, "match": ok})
             status = "✓" if ok else "✗"
             log(f"  N={n:>6d}  {ref_name} == {name}: {status}", flush=True)
@@ -180,8 +197,20 @@ def run_correctness_check(wrappers, ns, eps, d, log=print):
 
 
 # ── plots ─────────────────────────────────────────────────────────────────────
-_COLORS = {"pyballmapper (greedy, cdist+numba)": "#2563eb", "fast-ballmapper (greedy, ball_tree)": "#dc2626", "fast-ballmapper (greedy, faiss)": "#059669"}
-_MARKERS = {"pyballmapper (greedy, cdist+numba)": "o", "fast-ballmapper (greedy, ball_tree)": "s", "fast-ballmapper (greedy, faiss)": "D"}
+_COLORS = {
+    "pyballmapper (greedy, cdist+numba)": "#2563eb",
+    "pyballmapper-balltree (BallTree, scipy SpGEMM)": "#7c3aed",
+    "fast-ballmapper (greedy, ball_tree)": "#dc2626",
+    "fast-ballmapper (greedy, faiss)": "#059669",
+    "GPU-waveMIS (PyTorch + cuBLAS + cuSPARSE)": "#f59e0b",
+}
+_MARKERS = {
+    "pyballmapper (greedy, cdist+numba)": "o",
+    "pyballmapper-balltree (BallTree, scipy SpGEMM)": "P",
+    "fast-ballmapper (greedy, ball_tree)": "s",
+    "fast-ballmapper (greedy, faiss)": "D",
+    "GPU-waveMIS (PyTorch + cuBLAS + cuSPARSE)": "^",
+}
 
 
 def _apply_ax_style(ax, xlabel, ylabel):
@@ -268,21 +297,25 @@ def build_report(
     out_path: str,
 ) -> str:
     rep = Report(
-        "BallMapper benchmark: pyBallMapper vs fast-ballmapper",
+        "BallMapper benchmark: pyBallMapper vs fast-ballmapper vs GPU-waveMIS",
         subtitle=f"host={meta['host']} · reps={meta['reps']} · d={meta['d']} · {meta['timestamp']}",
     )
 
     # ── Correctness ──
     rep.h2("Correctness equivalence")
-    all_ok = all(r["match"] for r in correctness_rows)
-    rep.callout(
-        "All implementations produce <b>identical</b> landmarks, cover sets, and graph edges on shared inputs."
-        if all_ok else "Some implementations <b>diverge</b> — see the table.",
-        kind="good" if all_ok else "warn",
-    )
-    headers = ["N", "reference", "target", "match"]
-    table_rows = [[str(r["N"]), r["ref"], r["target"], "✓" if r["match"] else "✗"] for r in correctness_rows]
-    rep.table(headers, table_rows)
+    if correctness_rows:
+        all_ok = all(r["match"] for r in correctness_rows)
+        rep.callout(
+            "All implementations produce <b>identical</b> landmarks, cover sets, and graph edges on shared inputs."
+            if all_ok
+            else "Some implementations <b>diverge</b> — see the table.",
+            kind="good" if all_ok else "warn",
+        )
+        headers = ["N", "reference", "target", "match"]
+        table_rows = [[str(r["N"]), r["ref"], r["target"], "✓" if r["match"] else "✗"] for r in correctness_rows]
+        rep.table(headers, table_rows)
+    else:
+        rep.p("Correctness check not run (e.g. GPU must use different landmark sets by design).")
 
     # ── N-scaling ──
     rep.h2("Test 1 — N-scaling at fixed eps")
@@ -307,15 +340,17 @@ def build_report(
 
     # ── Notes ──
     rep.h2("Notes")
-    rep.html(
-        "<ul>"
-        "<li>Euclidean metric. Times and memory reported as mean +/- std over the repeats.</li>"
-        "<li>Peak RSS measured via <code>tracemalloc</code> (tracks Python allocations).</li>"
-        "<li>Synthetic data: Gaussian mixture, min-max normalised to [0, 1].</li>"
-        "<li>pyBallMapper uses <code>cdist</code> + Numba JIT for distances and set intersection for edges.</li>"
-        "<li>fast-ballmapper uses scikit-learn BallTree for distances and a dict-based edge construction.</li>"
-        "</ul>"
-    )
+    notes = [
+        "Euclidean metric. Times and memory reported as mean +/- std over the repeats.",
+        "Peak RSS measured via <code>tracemalloc</code> (tracks Python allocations).",
+        "Synthetic data: Gaussian mixture, min-max normalised to [0, 1].",
+        "pyBallMapper uses <code>cdist</code> + Numba JIT for distances and set intersection for edges.",
+        "fast-ballmapper uses scikit-learn BallTree for distances and a dict-based edge construction.",
+        "GPU-waveMIS uses PyTorch GEMM (cuBLAS) for distances + wavefront MIS for landmark selection.",
+    ]
+    if not meta.get("gpu_available"):
+        notes.append("GPU-waveMIS was <b>not available</b> on this host (no CUDA or no PyTorch).")
+    rep.html("<ul>" + "".join(f"<li>{n}</li>" for n in notes) + "</ul>")
 
     return rep.save(out_path)
 
@@ -324,6 +359,7 @@ def build_report(
 def main() -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+
     globals()["plt"] = plt
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -334,7 +370,14 @@ def main() -> None:
     ap.add_argument("--scaling-n", type=int, default=None, help="N for eps-scaling test")
     ap.add_argument("--reps", type=int, default=3, help="repetitions per timing")
     ap.add_argument("--out", default=".", help="output directory")
-    ap.add_argument("--impl", nargs="+", choices=["pyballmapper", "fast-balltree", "fast-faiss"], default=["pyballmapper", "fast-balltree"], help="implementations to benchmark")
+    ap.add_argument(
+        "--impl",
+        nargs="+",
+        choices=["pyballmapper", "pyballmapper-balltree", "fast-balltree", "fast-faiss", "gpu"],
+        default=["pyballmapper", "fast-balltree"],
+        help="implementations to benchmark",
+    )
+    ap.add_argument("--gpu-device", type=str, default="cuda:0", help="CUDA device for GPU impl")
     args = ap.parse_args()
 
     d = args.d
@@ -353,21 +396,33 @@ def main() -> None:
 
     scaling_n = args.scaling_n or min(2000, max(args.ns))
 
-    wrappers: dict[str, Callable[[np.ndarray, float], Wrapper]] = {}
+    wrappers: dict[str, Callable[..., Wrapper]] = {}
     if "pyballmapper" in args.impl:
         wrappers["pyballmapper (greedy, cdist+numba)"] = lambda X, eps: PyBallMapperWrapper(X, eps)
+    if "pyballmapper-balltree" in args.impl:
+        wrappers["pyballmapper-balltree (BallTree, scipy SpGEMM)"] = lambda X, eps: PyBallMapperBallTreeWrapper(X, eps)
     if "fast-balltree" in args.impl:
         wrappers["fast-ballmapper (greedy, ball_tree)"] = lambda X, eps: FastBallMapperWrapper(X, eps, method="ball_tree")
     if "fast-faiss" in args.impl:
         wrappers["fast-ballmapper (greedy, faiss)"] = lambda X, eps: FastBallMapperWrapper(X, eps, method="faiss")
+    if "gpu" in args.impl:
+        if GpuBallMapperWrapper is None:
+            print("WARNING: GPU impl requested but torch+cuda not available. Skipping GPU.", flush=True)
+        else:
+            dev = args.gpu_device
+            wrappers["GPU-waveMIS (PyTorch + cuBLAS + cuSPARSE)"] = lambda X, eps, dev=dev: GpuBallMapperWrapper(X, eps, device=dev)
 
     print(f"benchmark_ballmapper | host={socket.gethostname().split('.')[0]} reps={args.reps} d={d}", flush=True)
     print(f"  implementations: {list(wrappers.keys())}", flush=True)
     print(f"  scaling_eps={scaling_eps:.4f}  scaling_n={scaling_n:,}", flush=True)
 
-    # Correctness check on a subset
-    print("\n=== Correctness check ===", flush=True)
-    correctness_rows = run_correctness_check(wrappers, [500, 1000, 2000], scaling_eps, d)
+    # Correctness check (skip GPU — it uses a different landmark set by design)
+    correctness_wrappers = {k: v for k, v in wrappers.items() if "GPU" not in k}
+    if correctness_wrappers:
+        print("\n=== Correctness check ===", flush=True)
+        correctness_rows = run_correctness_check(correctness_wrappers, [500, 1000, 2000], scaling_eps, d)
+    else:
+        correctness_rows = []
 
     print("\n=== Test 1: N-scaling ===", flush=True)
     n_rows = run_n_scaling(wrappers, args.ns, scaling_eps, args.reps, d)
@@ -383,6 +438,7 @@ def main() -> None:
         "scaling_eps": scaling_eps,
         "scaling_n": scaling_n,
         "timestamp": time.strftime("%Y-%m-%d %H:%M"),
+        "gpu_available": _HAS_CUDA,
     }
 
     os.makedirs(args.out, exist_ok=True)

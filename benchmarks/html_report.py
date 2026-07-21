@@ -3,7 +3,9 @@ HTML benchmark report.
 
 Matplotlib figures are embedded as base64 PNGs and tables are emitted as
 inline-styled HTML, so the produced ``report.html`` is ONE file that opens in
-any browser, offline, with no external assets.
+any browser, offline, with no external assets.  Only numpy / matplotlib are
+imported (lazily, inside the methods that need them) so this module also loads
+on a machine without a GPU or the heavier benchmark dependencies.
 """
 
 from __future__ import annotations
@@ -11,11 +13,6 @@ from __future__ import annotations
 import base64
 import html as _html
 import io
-
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 
 _CSS = """
 :root{
@@ -46,7 +43,6 @@ th{background:var(--accent-soft); color:var(--fg); font-weight:600}
 td:first-child,th:first-child{text-align:left}
 tbody tr:nth-child(even){background:var(--stripe)}
 .good{color:var(--good); font-weight:600}
-.warn{color:var(--warn); font-weight:600}
 .bad{color:var(--bad); font-weight:600}
 figure{margin:8px 0 24px}
 figure img{max-width:100%; border:1px solid var(--border); border-radius:8px}
@@ -64,29 +60,32 @@ figcaption{color:var(--fg-soft); font-size:13px; margin-top:6px}
 class Report:
     """Accumulate report blocks, then ``save()`` a single self-contained file."""
 
-    def __init__(self, title: str, subtitle: str = "") -> None:
+    def __init__(self, title: str, subtitle: str = ""):
         self.title = title
         self.subtitle = subtitle
         self._parts: list[str] = []
 
-    def h2(self, text: str) -> Report:
+    # ── content blocks ──────────────────────────────────────────────────────
+    def h2(self, text: str) -> "Report":
         self._parts.append(f"<h2>{_html.escape(text)}</h2>")
         return self
 
-    def p(self, html_text: str) -> Report:
+    def p(self, html_text: str) -> "Report":
         self._parts.append(f"<p>{html_text}</p>")
         return self
 
-    def html(self, raw: str) -> Report:
+    def html(self, raw: str) -> "Report":
         self._parts.append(raw)
         return self
 
-    def callout(self, html_text: str, kind: str = "info") -> Report:
+    def callout(self, html_text: str, kind: str = "info") -> "Report":
         cls = "callout" if kind == "info" else f"callout {kind}"
         self._parts.append(f'<div class="{cls}">{html_text}</div>')
         return self
 
-    def table(self, headers: list[str], rows: list[list[str]]) -> Report:
+    def table(self, headers, rows) -> "Report":
+        """``headers``: list[str]; ``rows``: list[list[str]] (pre-formatted,
+        may contain inline HTML such as ``<span class='good'>``)."""
         head = "".join(f"<th>{_html.escape(str(h))}</th>" for h in headers)
         body = []
         for r in rows:
@@ -101,9 +100,12 @@ class Report:
         )
         return self
 
-    def figure(self, fig: plt.Figure, caption: str = "", dpi: int = 130) -> Report:
+    def figure(self, fig, caption: str = "", dpi: int = 130) -> "Report":
+        """Embed a matplotlib Figure as a base64 PNG (no external file)."""
         buf = io.BytesIO()
         fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
+        import matplotlib.pyplot as plt
+
         plt.close(fig)
         b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         cap = f"<figcaption>{caption}</figcaption>" if caption else ""
@@ -112,6 +114,17 @@ class Report:
         )
         return self
 
+    def image_file(self, path: str, caption: str = "") -> "Report":
+        """Embed an existing PNG file as base64 (used to inline saved figures)."""
+        with open(path, "rb") as fh:
+            b64 = base64.b64encode(fh.read()).decode("ascii")
+        cap = f"<figcaption>{caption}</figcaption>" if caption else ""
+        self._parts.append(
+            f'<figure><img src="data:image/png;base64,{b64}" alt="">{cap}</figure>'
+        )
+        return self
+
+    # ── output ──────────────────────────────────────────────────────────────
     def save(self, path: str) -> str:
         sub = f'<p class="subtitle">{self.subtitle}</p>' if self.subtitle else ""
         doc = (

@@ -9,12 +9,15 @@ dependencies = [
     "networkx",
     "scikit-learn",
     "pyballmapper",
+    "pyballmapper-balltree",
     "fast-ballmapper[faiss]>=0.1.0",
+    "tqdm>=4.69.0",
 ]
 
 [tool.uv.sources]
-pyBallMapper = { path = "/Users/davide/GitHub/pyBallMapper" }
-fast-ballmapper = { path = "/Users/davide/GitHub/fast-ballmapper" }
+pyBallMapper = { git = "https://github.com/jooyounghahn/pyBallMapper.git", branch = "add-gpu-wavemis-benchmark" }
+pyBallMapper-balltree = { path = "/tmp/balltree-pkg" }
+fast-ballmapper = { git = "https://github.com/jhnrckmnznrs/fast-ballmapper" }
 
 [tool.uv.workspace]
 members = []
@@ -26,3 +29,8 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
 ignore = ["E203", "E501"]
+
+[dependency-groups]
+dev = [
+    "torch>=2.13.0",
+]
