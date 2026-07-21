@@ -57,7 +57,7 @@ bench-ballmapper/
 Requires Python ≥ 3.13 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone https://github.com/davidegurnari/bench-ballmapper
+git clone https://github.com/dgurnari/bench-ballmapper
 cd bench-ballmapper
 
 # Step 1: Build pyballmapper-balltree from the integrate-balltree branch

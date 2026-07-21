@@ -8,13 +8,13 @@ set -euo pipefail
 echo "==> Cloning pyBallMapper (integrate-balltree branch) into /tmp/balltree-pkg"
 rm -rf /tmp/balltree-pkg
 git clone --branch integrate-balltree --single-branch \
-    https://github.com/jooyounghahn/pyBallMapper.git /tmp/balltree-pkg
+    https://github.com/jooyounghahn/pyBallMapper.git ./tmp/balltree-pkg
 
 echo "==> Renaming package to pyballmapper-balltree"
-sed -i '' 's/^name = "pyBallMapper"/name = "pyBallMapper-balltree"/' /tmp/balltree-pkg/pyproject.toml
+sed -i '' 's/^name = "pyBallMapper"/name = "pyBallMapper-balltree"/' ./tmp/balltree-pkg/pyproject.toml
 
 echo "==> Building wheel"
-cd /tmp/balltree-pkg && uv build
+cd ./tmp/balltree-pkg && uv build
 
 echo "==> Done! Wheel at:"
-ls /tmp/balltree-pkg/dist/pyballmapper_balltree-*.whl
+ls ./tmp/balltree-pkg/dist/pyballmapper_balltree-*.whl
