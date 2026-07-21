@@ -37,7 +37,7 @@ requires-dist = [
     { name = "networkx" },
     { name = "numpy" },
     { name = "pyballmapper", git = "https://github.com/jooyounghahn/pyBallMapper.git?branch=add-gpu-wavemis-benchmark" },
-    { name = "pyballmapper-balltree", directory = "/tmp/balltree-pkg" },
+    { name = "pyballmapper-balltree", directory = "tmp/balltree-pkg" },
     { name = "scikit-learn" },
     { name = "tqdm", specifier = ">=4.69.0" },
 ]
@@ -887,7 +887,7 @@ dependencies = [
 
 [[package]]
 name = "pyballmapper-balltree"
-source = { directory = "/tmp/balltree-pkg" }
+source = { directory = "tmp/balltree-pkg" }
 dependencies = [
     { name = "bokeh" },
     { name = "matplotlib" },
