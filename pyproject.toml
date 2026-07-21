@@ -1,0 +1,28 @@
+[project]
+name = "bench-ballmapper"
+version = "0.1.0"
+description = "Benchmark comparing pyBallMapper vs fast-ballmapper"
+requires-python = ">=3.13"
+dependencies = [
+    "matplotlib",
+    "numpy",
+    "networkx",
+    "scikit-learn",
+    "pyballmapper",
+    "fast-ballmapper[faiss]>=0.1.0",
+]
+
+[tool.uv.sources]
+pyBallMapper = { path = "/Users/davide/GitHub/pyBallMapper" }
+fast-ballmapper = { path = "/Users/davide/GitHub/fast-ballmapper" }
+
+[tool.uv.workspace]
+members = []
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E203", "E501"]
