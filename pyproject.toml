@@ -2,7 +2,7 @@
 name = "bench-ballmapper"
 version = "0.1.0"
 description = "Benchmark comparing pyBallMapper vs fast-ballmapper"
-requires-python = ">=3.13"
+requires-python = ">=3.10,<3.12"
 dependencies = [
     "matplotlib",
     "numpy",
@@ -11,13 +11,21 @@ dependencies = [
     "pyballmapper",
     "pyballmapper-balltree",
     "fast-ballmapper[faiss]>=0.1.0",
-    "tqdm>=4.69.0",
+    "tqdm",
 ]
 
 [tool.uv.sources]
 pyBallMapper = { git = "https://github.com/jooyounghahn/pyBallMapper.git", branch = "add-gpu-wavemis-benchmark" }
 pyBallMapper-balltree = { path = "./tmp/balltree-pkg" }
 fast-ballmapper = { git = "https://github.com/jhnrckmnznrs/fast-ballmapper" }
+torch = { index = "pytorch-cu117" }
+torchvision = { index = "pytorch-cu117" }
+torchaudio = { index = "pytorch-cu117" }
+
+[[tool.uv.index]]
+name = "pytorch-cu117"
+url = "https://download.pytorch.org/whl/cu117"
+explicit = true
 
 [tool.uv.workspace]
 members = []
@@ -32,5 +40,7 @@ ignore = ["E203", "E501"]
 
 [dependency-groups]
 dev = [
-    "torch>=2.13.0",
+    "torch==2.0.1",
+    "torchvision==0.15.2",
+    "torchaudio==2.0.2",
 ]
